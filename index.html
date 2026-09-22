@@ -250,7 +250,13 @@ main{padding:28px 24px 64px}
 .choice:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .choice:disabled{cursor:default}
 .choice .bub{width:30px;height:30px;font-size:13px;flex:none}
-.prob.answered .choice:not(.right):not(.wrong){opacity:.55}
+.prob.solved .choice:not(.right){opacity:.55}
+.choice.selected{border:2px solid var(--ink);padding:7px 13px;background:var(--surface)}
+.choice.selected .bub{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+.choice.wrong:disabled{cursor:not-allowed}
+.submit-row{display:flex;align-items:center;gap:14px;margin-top:14px}
+.submit-row[hidden]{display:none}
+.submit-row .tries{font-size:14px;color:var(--muted)}
 .choice.right,.prob.show .choice.right{border-color:var(--blue);background:var(--blue-soft);opacity:1}
 .choice.right .bub,.prob.show .choice.right .bub{background:var(--blue);border-color:var(--blue);color:var(--blue-ink)}
 .choice.wrong{border-color:var(--red);background:var(--red-soft);opacity:1}
@@ -616,16 +622,16 @@ function choiceList(p, forPrint) {
   }
   const box = el("div", { class: "choices" + (long ? " long" : ""), role: "group", "aria-label": "Answer choices" });
   texts.forEach((t, i) => {
-    box.append(el("button", { type: "button", class: "choice", "data-letter": letters[i], "aria-label": `Answer ${letters[i]}` },
+    box.append(el("button", { type: "button", class: "choice", "data-letter": letters[i], "aria-pressed": "false", "aria-label": `Answer ${letters[i]}` },
       el("span", { class: "bub", "aria-hidden": "true", text: letters[i] }), el("span", { class: "ctext", text: t })));
   });
   return box;
 }
-const session = { answered: 0, correct: 0 };
+const session = { solved: 0, firstTry: 0 };
 function updateSession() {
   const s = $("session"); if (!s) return;
-  s.hidden = !session.answered;
-  s.textContent = `${session.correct} of ${session.answered} correct this visit`;
+  s.hidden = !session.solved;
+  s.textContent = `${session.solved} solved this visit, ${session.firstTry} on the first try`;
 }
 function card(p) {
   if (cardCache.has(p.id)) return cardCache.get(p.id);
@@ -633,7 +639,8 @@ function card(p) {
   const art = el("article", { class: "prob", "aria-labelledby": "h-" + p.id });
   const revealBtn = el("button", { class: "btn quiet", type: "button", "aria-expanded": "false", text: p.a ? "Show answer" : "Show notes" });
   const pinBtn = el("button", { class: "btn", type: "button", "aria-pressed": state.pinned.includes(p.id) ? "true" : "false", text: state.pinned.includes(p.id) ? "In set" : "Add to set" });
-  const feedback = el("div", { class: "feedback", role: "status", hidden: true });
+  const submitBtn = el("button", { class: "btn primary", type: "button", disabled: true, text: "Submit" });
+  const feedback = el("div", { class: "feedback", role: "status", "aria-live": "polite", hidden: true });
   const answer = el("div", { class: "answer", hidden: true });
   if (p.a) answer.append(el("div", {}, el("b", { text: `Answer: ${answerText(p.a)}. ` }), el("span", { text: p.idea || "" })));
   else answer.append(el("div", {}, el("b", { text: "No answer counted. " }), el("span", { text: p.idea || "" })));
@@ -646,6 +653,7 @@ function card(p) {
     p.stats && p.stats.thrown ? el("span", { class: "tag thrown", text: "Thrown out" }) : null,
     tier);
   const choices = choiceList(p, false);
+  const submitRow = el("div", { class: "submit-row" }, submitBtn, el("span", { class: "tries", hidden: true }));
   const put = (...kids) => { for (const k of kids.flat()) if (k != null && k !== false && k !== "") art.append(k); };
   put(
     head,
@@ -655,53 +663,66 @@ function card(p) {
     el("div", { class: "stmt", text: p.q }),
     figNode(p.fig, SCREEN_COLORS),
     choices,
+    submitRow,
     feedback,
     p.note ? el("div", { class: "notice", text: p.note }) : null,
     answer,
     el("footer", { class: "card-foot" }, ruler(p), el("div", { class: "actions" }, revealBtn, pinBtn)));
 
+  const st = { selected: null, tries: 0, solved: false, revealed: false };
+  const buttons = () => [...choices.querySelectorAll(".choice")];
+  const say = (kind, bold, rest) => {
+    feedback.hidden = false; feedback.className = "feedback " + kind; feedback.textContent = "";
+    feedback.append(el("b", { text: bold }), rest ? " " + rest : "");
+  };
+  const lock = () => { buttons().forEach((b) => { b.disabled = true; }); submitBtn.disabled = true; };
   const showAnswer = (open) => {
     answer.hidden = !open; art.classList.toggle("show", open);
     revealBtn.setAttribute("aria-expanded", String(open));
     revealBtn.textContent = open ? (p.a ? "Hide answer" : "Hide notes") : (p.a ? "Show answer" : "Show notes");
-  };
-  const reset = () => {
-    delete art.dataset.answered; art.classList.remove("answered");
-    choices.querySelectorAll(".choice").forEach((b) => { b.classList.remove("picked", "right", "wrong"); b.disabled = false; });
-    feedback.hidden = true; feedback.textContent = ""; showAnswer(false);
+    buttons().forEach((b) => { if (p.a && p.a.includes(b.dataset.letter)) b.classList.toggle("right", open || st.solved); });
   };
   choices.addEventListener("click", (e) => {
-    const btn = e.target.closest(".choice"); if (!btn || art.dataset.answered) return;
-    const L = btn.dataset.letter; art.dataset.answered = L; art.classList.add("answered");
-    choices.querySelectorAll(".choice").forEach((b) => {
-      b.disabled = true;
-      if (p.a && p.a.includes(b.dataset.letter)) b.classList.add("right");
-    });
-    btn.classList.add("picked");
-    feedback.textContent = ""; feedback.hidden = false;
-    if (!p.a) {
-      feedback.className = "feedback neutral";
-      feedback.append(el("b", { text: "This question was thrown out, " }), "so no answer counted. The notes below explain why.");
-    } else if (p.a.includes(L)) {
-      feedback.className = "feedback good";
-      feedback.append(el("b", { text: "Correct. " }), p.a.length > 1 ? `Both ${answerText(p.a)} were accepted.` : "Here's the key idea.");
-      session.correct++;
-    } else {
-      btn.classList.add("wrong");
-      feedback.className = "feedback bad";
-      feedback.append(el("b", { text: `Not quite. ` }), `The answer is ${answerText(p.a)}.`,
-        p.trap && p.trap.choice === L ? el("span", { class: "trapline", text: " You picked the common trap; see why below." }) : "");
-    }
-    if (p.a) { session.answered++; updateSession(); }
-    const again = el("button", { type: "button", class: "linkbtn", text: "Try it again" });
-    again.addEventListener("click", () => { if (p.a && art.dataset.answered) { session.answered--; if (p.a.includes(art.dataset.answered)) session.correct--; updateSession(); } reset(); });
-    feedback.append(" ", again);
-    showAnswer(true);
+    const btn = e.target.closest(".choice"); if (!btn || btn.disabled || st.solved) return;
+    buttons().forEach((b) => { b.classList.toggle("selected", b === btn); b.setAttribute("aria-pressed", String(b === btn)); });
+    st.selected = btn.dataset.letter; submitBtn.disabled = false;
   });
+  submitBtn.addEventListener("click", () => {
+    if (!st.selected || st.solved) return;
+    const L = st.selected, btn = buttons().find((b) => b.dataset.letter === L);
+    st.tries++;
+    if (!p.a) {
+      st.solved = true; lock(); submitRow.hidden = true;
+      say("neutral", "This question was thrown out,", "so no answer counted. The notes below explain why.");
+      showAnswer(true); return;
+    }
+    if (p.a.includes(L)) {
+      st.solved = true; btn.classList.remove("selected"); btn.classList.add("right"); art.classList.add("solved"); lock();
+      submitRow.hidden = true;
+      say("good", "Correct.", st.tries === 1 ? "" : `Solved in ${st.tries} tries.`);
+      if (!st.revealed) { session.solved++; if (st.tries === 1) session.firstTry++; updateSession(); }
+      const again = el("button", { type: "button", class: "linkbtn", text: "Start over" });
+      again.addEventListener("click", () => reset());
+      feedback.append(" ", again);
+      showAnswer(true);
+    } else {
+      btn.classList.remove("selected"); btn.classList.add("wrong"); btn.disabled = true; btn.setAttribute("aria-pressed", "false");
+      st.selected = null; submitBtn.disabled = true;
+      say("bad", "Incorrect, try again.");
+      const tries = submitRow.querySelector(".tries"); tries.hidden = false; tries.textContent = `${st.tries} ${st.tries === 1 ? "try" : "tries"} so far`;
+    }
+  });
+  const reset = () => {
+    Object.assign(st, { selected: null, tries: 0, solved: false, revealed: false });
+    art.classList.remove("solved");
+    buttons().forEach((b) => { b.classList.remove("selected", "right", "wrong"); b.disabled = false; b.setAttribute("aria-pressed", "false"); });
+    submitBtn.disabled = true; submitRow.hidden = false; feedback.hidden = true; feedback.textContent = "";
+    const tries = submitRow.querySelector(".tries"); tries.hidden = true; tries.textContent = "";
+    showAnswer(false);
+  };
   revealBtn.addEventListener("click", () => {
     const open = answer.hidden;
-    if (open) choices.querySelectorAll(".choice").forEach((b) => { if (p.a && p.a.includes(b.dataset.letter)) b.classList.add("right"); });
-    else if (!art.dataset.answered) choices.querySelectorAll(".choice").forEach((b) => b.classList.remove("right"));
+    if (open && !st.solved) st.revealed = true;   // solving after peeking doesn't count toward the visit tally
     showAnswer(open);
   });
   pinBtn.addEventListener("click", () => { togglePin(p.id); });
@@ -742,19 +763,27 @@ function renderRail() {
   const rail = $("rail"); rail.textContent = "";
   const all = allProblems();
   const countBy = (fn) => { const m = new Map(); for (const p of all) { const k = fn(p); m.set(k, (m.get(k) || 0) + 1); } return m; };
-  const divCounts = countBy((p) => p.div), yearCounts = countBy((p) => p.year), topicCounts = countBy((p) => p.topic);
+  const divCounts = countBy((p) => p.div);
+  const yearCounts = new Map(); for (const p of all) if (state.divs.has(p.div)) yearCounts.set(p.year, (yearCounts.get(p.year) || 0) + 1);
   rail.append(el("h2", { text: "Division" }));
   for (const d of DIVISIONS) {
     const n = divCounts.get(d) || 0;
-    const cb = el("input", { type: "checkbox", checked: state.divs.has(d), disabled: !n });
-    cb.addEventListener("change", () => { cb.checked ? state.divs.add(d) : state.divs.delete(d); renderList(); });
+    const cb = el("input", { type: "checkbox", checked: state.divs.has(d), disabled: !n, "data-div": d });
+    cb.addEventListener("change", () => {
+      cb.checked ? state.divs.add(d) : state.divs.delete(d);
+      // keep only topic ticks that still exist in the chosen divisions, then redraw the topic list
+      const live = new Set(allProblems().filter((p) => state.divs.has(p.div)).map((p) => p.topic));
+      for (const tp of [...state.topics]) if (!live.has(tp)) state.topics.delete(tp);
+      renderRail(); renderList();
+      const again = document.querySelector(`#rail input[data-div="${d}"]`); if (again) again.focus();
+    });
     rail.append(el("label", { class: "check" + (n ? "" : " off") }, cb, d, el("span", { class: "n", text: n ? String(n) : "no tests yet" })));
   }
   rail.append(el("h2", { text: "Year" }));
   for (const y of years()) {
     const cb = el("input", { type: "checkbox", checked: state.years.has(y) });
     cb.addEventListener("change", () => { cb.checked ? state.years.add(y) : state.years.delete(y); renderList(); });
-    rail.append(el("label", { class: "check" }, cb, `${y} States`, el("span", { class: "n", text: String(yearCounts.get(y)) })));
+    rail.append(el("label", { class: "check" }, cb, `${y} States`, el("span", { class: "n", text: String(yearCounts.get(y) || 0) })));
   }
   rail.append(el("h2", { text: "Difficulty tier" }));
   const tiers = el("div", { class: "tiers", role: "group", "aria-label": "Difficulty tiers" });
@@ -773,13 +802,16 @@ function renderRail() {
   }
   rail.append(seg);
   rail.append(el("h2", { text: "Topic" }));
+  const inDivs = all.filter((p) => state.divs.has(p.div));
+  const tCounts = new Map(); for (const p of inDivs) tCounts.set(p.topic, (tCounts.get(p.topic) || 0) + 1);
+  if (!state.divs.size) rail.append(el("p", { class: "hint", text: "Pick a division to see its topics." }));
   for (const tp of TOPICS) {
-    const n = topicCounts.get(tp) || 0; if (!n) continue;
+    const n = tCounts.get(tp) || 0; if (!n) continue;
     const cb = el("input", { type: "checkbox", checked: state.topics.has(tp) });
     cb.addEventListener("change", () => { cb.checked ? state.topics.add(tp) : state.topics.delete(tp); renderList(); });
     rail.append(el("label", { class: "check" }, cb, tp, el("span", { class: "n", text: String(n) })));
   }
-  rail.append(el("p", { class: "hint" }, "No topic ticked means all topics."));
+  if (state.divs.size) rail.append(el("p", { class: "hint" }, "No topic ticked means every topic in the chosen divisions."));
   rail.append(el("h2", {}, el("label", { for: "q", text: "Search skills and text" })));
   const q = el("input", { class: "search", id: "q", type: "search", maxlength: "60", value: state.q, placeholder: "e.g. Vieta" });
   q.addEventListener("input", () => { state.q = q.value.trim(); renderList(); });
@@ -810,25 +842,34 @@ function updatePinCount() {
   const pc = $("pincount"); const n = state.set.length;
   pc.hidden = !n; pc.textContent = String(n);
 }
-const bstate = { divs: new Set(["Alpha"]), topics: new Set(TOPICS), tiers: new Set([1,2,3]), order: "easy" };
+const bstate = { divs: new Set(["Alpha"]), off: new Set(), tiers: new Set([1,2,3]), order: "easy" };
+function bVisibleTopics() { return TOPICS.filter((tp) => allProblems().some((p) => scored(p) && bstate.divs.has(p.div) && p.topic === tp)); }
+function bTopics() { return new Set(bVisibleTopics().filter((tp) => !bstate.off.has(tp))); }
 function buildPool(excludeIds) {
   const traps = $("b-traps").checked;
-  return allProblems().filter((p) => scored(p) && bstate.divs.has(p.div) && bstate.topics.has(p.topic) && bstate.tiers.has(p.stats.tier) && (!traps || p.kind === "trap") && !(excludeIds && excludeIds.has(p.id)));
+  const topics = bTopics();
+  return allProblems().filter((p) => scored(p) && bstate.divs.has(p.div) && topics.has(p.topic) && bstate.tiers.has(p.stats.tier) && (!traps || p.kind === "trap") && !(excludeIds && excludeIds.has(p.id)));
 }
 function renderBuildForm() {
   const all = allProblems();
   const divBox = $("b-divs"); divBox.textContent = "";
   for (const d of DIVISIONS) {
     const n = all.filter((p) => p.div === d && scored(p)).length;
-    const cb = el("input", { type: "checkbox", checked: bstate.divs.has(d), disabled: !n });
-    cb.addEventListener("change", () => { cb.checked ? bstate.divs.add(d) : bstate.divs.delete(d); updatePoolHint(); });
+    const cb = el("input", { type: "checkbox", checked: bstate.divs.has(d), disabled: !n, "data-div": d });
+    cb.addEventListener("change", () => {
+      cb.checked ? bstate.divs.add(d) : bstate.divs.delete(d);
+      renderBuildForm();
+      const again = document.querySelector(`#b-divs input[data-div="${d}"]`); if (again) again.focus();
+    });
     divBox.append(el("label", { class: "check" + (n ? "" : " off") }, cb, d, el("span", { class: "n", text: n ? String(n) : "no tests yet" })));
   }
   const tb = $("b-topics"); tb.textContent = "";
-  for (const tp of TOPICS) {
-    const n = all.filter((p) => p.topic === tp && scored(p)).length; if (!n) continue;
-    const cb = el("input", { type: "checkbox", checked: bstate.topics.has(tp), "data-topic": tp });
-    cb.addEventListener("change", () => { cb.checked ? bstate.topics.add(tp) : bstate.topics.delete(tp); updatePoolHint(); });
+  const vis = bVisibleTopics();
+  if (!vis.length) tb.append(el("p", { class: "hint", text: "Pick a division to see its topics." }));
+  for (const tp of vis) {
+    const n = all.filter((p) => p.topic === tp && scored(p) && bstate.divs.has(p.div)).length;
+    const cb = el("input", { type: "checkbox", checked: !bstate.off.has(tp), "data-topic": tp });
+    cb.addEventListener("change", () => { cb.checked ? bstate.off.delete(tp) : bstate.off.add(tp); updatePoolHint(); });
     tb.append(el("label", { class: "check" }, cb, tp, el("span", { class: "n", text: String(n) })));
   }
   const tiers = $("b-tiers"); tiers.textContent = "";
@@ -847,7 +888,8 @@ function generate() {
   const status = $("b-status"); status.className = "status";
   let count = parseInt($("b-count").value, 10);
   if (!Number.isFinite(count) || count < 1 || count > 60) { status.className = "status err"; status.textContent = "Choose between 1 and 60 problems."; return; }
-  if (!bstate.topics.size) { status.className = "status err"; status.textContent = "Tick at least one topic."; return; }
+  if (!bstate.divs.size) { status.className = "status err"; status.textContent = "Pick at least one division."; return; }
+  if (!bTopics().size) { status.className = "status err"; status.textContent = "Tick at least one topic."; return; }
   if (!bstate.tiers.size) { status.className = "status err"; status.textContent = "Pick at least one difficulty tier."; return; }
   const pinned = state.pinned.filter((id) => allProblems().some((p) => p.id === id));
   const need = Math.max(0, count - pinned.length);
@@ -1201,8 +1243,8 @@ $("b-order").addEventListener("click", (e) => {
   if (state.set.length) { state.set = orderIds(state.set); renderSet(); }
 });
 $("b-traps").addEventListener("change", updatePoolHint);
-$("b-alltopics").addEventListener("click", () => { TOPICS.forEach((t) => bstate.topics.add(t)); renderBuildForm(); });
-$("b-notopics").addEventListener("click", () => { bstate.topics.clear(); renderBuildForm(); });
+$("b-alltopics").addEventListener("click", () => { bstate.off.clear(); renderBuildForm(); });
+$("b-notopics").addEventListener("click", () => { bVisibleTopics().forEach((tp) => bstate.off.add(tp)); renderBuildForm(); });
 $("settitle").addEventListener("input", renderSetTitleOnly);
 function renderSetTitleOnly() { if (state.set.length) $("set-title").textContent = `${$("settitle").value.trim() || "Practice set"}: ${state.set.length} problem${state.set.length > 1 ? "s" : ""}`; }
 $("set-clear").addEventListener("click", () => {

@@ -1160,7 +1160,7 @@ function renderData() {
     el("p", { text: "A few questions don't separate stronger students from weaker ones at all. Their ratings come from the plain correct rate instead and are marked approximate; that pattern usually points at wording or at a disputed answer." }),
     el("p", { text: "On the hardest problems no group of students, not even the strongest, reaches a 50% solve rate. There the 50% point sits past the top of the field, so no percentile is shown and the ruler's marker is drawn open at the end. Those problems are still ranked by the fit, but the exact position is an extrapolation." }),
     el("h2", { text: "Privacy" }),
-    el("p", { text: "This page contains no student names, schools, or individual results, only per-question totals. It sends nothing anywhere, and nothing you do here is seen by anyone else: answers you click and sets you build stay in your own browser. Its only outside requests load the fonts and the math and PDF tools." }));
+    el("p", { text: "It's private, dw." }));
   if (!PUBLIC_BUILD) v.append(el("p", { text: "Use a problem file exported by your bank server. Files are checked field by field: anything that isn't a problem field is dropped, including any names, and figures can only point to the built-in figure set." }));
   if (PUBLIC_BUILD) {
     v.append(el("h2", { text: "Diagnostics" }), el("p", { style: "font-size:13px;color:var(--muted)", text:
